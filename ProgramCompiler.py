@@ -1,98 +1,164 @@
-import os
-import tempfile
-import random
-import shutil
-import subprocess
-import sys
+from tkinter import Tk, Label, Entry, Button, StringVar, Toplevel, IntVar
+from tkinter.filedialog import askopenfile
+from tkinter.messagebox import showerror, askquestion
+from tkinter.ttk import Progressbar
+from os import makedirs, startfile, popen
+from os import path as _path
+from sys import platform, builtin_module_names
+from shutil import copy, rmtree
+from random import choice
+from re import MULTILINE, findall
+from tempfile import gettempdir
+from platform import system
+from pathlib import Path
+from shutil import copy
+from subprocess import run, DEVNULL, CalledProcessError
+from platform import system
+from threading import Thread
+from importlib.util import find_spec
 
+# Functions
 def gen_randenc():
-    # Generate a random alphanumeric string of length 20
-    string = ''.join(random.choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(20))
-    print(f"[ProgramCompiler] Создан рандомный код: {string}")
+    string = ''.join(choice('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') for _ in range(20))
     return string
 
-def main():
-    print('-----------------[ProgramCompiler v0.5 by Plizik]-----------------')
-    path = input("[ProgramCompiler] Введите путь к файлу: ").strip()
-    req_lib = input("[ProgramCompiler] Введите требуемые библиотеки через запятую (если нет, оставьте пустым): ").strip()
+def is_builtin_or_installed(module_name):
+    if module_name in builtin_module_names:
+        return True
+    loader = find_spec(module_name)
+    return loader is not None
+
+def get_imports_from_file(file_path):
     try:
-        # Define paths
-        temppath = tempfile.gettempdir()  # Temporary directory path
-        appname = os.path.basename(path)[:-3]  # Extract application name without the .py extension
-        programdest = gen_randenc()  # Generate random directory name
-        dest_dir = os.path.join(temppath, programdest)  # Destination directory path
-        build_dir = os.path.join(dest_dir, 'build')  # Build directory path
-        dist_dir = os.path.join(dest_dir, 'application')  # Distribution directory path
-        liblist = [lib.strip() for lib in req_lib.split(',')] if req_lib else []  # List of required libraries
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        raise Exception("[ProgramCompiler] Ошибка: файл должен быть в кодировке UTF-8")
+    imports = findall(r'^\s*(?:import|from)\s+([^\s.]+)', content, MULTILINE)
+    filtered_imports = {module for module in imports if not is_builtin_or_installed(module)}
+    return filtered_imports
 
-        # Print paths and library list
-        print(f"[ProgramCompiler] Временный путь: {temppath}")
-        print(f"[ProgramCompiler] Название приложения: {appname}")
-        print(f"[ProgramCompiler] Путь расположения: {dest_dir}")
-        print(f"[ProgramCompiler] Путь сборки: {build_dir}")
-        print(f"[ProgramCompiler] Путь дистрибутива: {dist_dir}")
-        print(f'[ProgramCompiler] Требуемые библиотеки для установки: {liblist}')
+def install_missing_libraries(imports):
+    for lib in imports:
+        try:
+            run(f"pip show {lib}", shell=True, check=True, stdout=DEVNULL)
+            print(f"[ProgramCompiler] Библиотека {lib} уже установлена.")
+        except CalledProcessError:
+            print(f"[ProgramCompiler] Установка библиотеки {lib}...")
+            run(f"pip install {lib}", shell=True, check=True)
+            print(f"[ProgramCompiler] Библиотека {lib} успешно установлена.")
 
-        # Create necessary directories
-        os.makedirs(build_dir, exist_ok=True)
-        os.makedirs(dist_dir, exist_ok=True)
+def choosedir(path: str):
+    temppath = gettempdir()
+    appname = _path.basename(path)[:-3]
+    programdest = gen_randenc()
+    dest_dir = _path.join(temppath, programdest)
+    build_dir = _path.join(dest_dir, 'build')
+    dist_dir = _path.join(dest_dir, 'application')
+    return temppath, appname, programdest, dest_dir, build_dir, dist_dir
 
-        # Create virtual environment
-        print('[ProgramCompiler] Создаём виртуальную среду для программы...')
-        subprocess.run(['python', '-m', 'venv', 'venv'], check=True)
-        
-        # Path to the activate script
-        if os.name == 'nt':  # Windows
-            activate_script = os.path.join('venv', 'Scripts', 'activate.bat')
-        else:  # Unix-like (Linux, macOS, etc.)
-            activate_script = os.path.join('venv', 'bin', 'activate')
+def return_homepath() -> str:
+    return Path.home()
 
-        # Install required libraries
-        print('[ProgramCompiler] Загружаем библиотеки...')
-        subprocess.run(f'{activate_script} && pip install pyinstaller', shell=True, check=True)
+def openfolder(path) -> str:
+    if system() == "Windows":
+        startfile(path)
+    elif system() == "Darwin":
+        popen(["open", path])
+    else:
+        popen(["xdg-open", path])
 
-        for lib in liblist:
+# Main
+class Main(Tk):
+    def __init__(self):
+        super().__init__()
+        self.title('ProgramCompiler')
+        self.main()
+    
+    def main(self):
+        path: StringVar = StringVar()
+        Label(self, text='Путь к файлу: ').grid(row=0, column=0, padx=5, pady=5)
+        Entry(textvariable=path).grid(row=0, column=1, padx=5, pady=5)
+        Button(text="Выбрать", command=lambda: self.openfile(path)).grid(row=0, column=2, padx=5, pady=5)
+        Button(text="Собрать", command=lambda: self.compile(path)).grid(row=1, column=1, padx=5, pady=5)
+    
+    def openfile(self, path):
+        file = askopenfile(initialdir=return_homepath(), title="Выберите файл")
+
+        if file is not None:
+            path.set(file.name)
+    
+    def compile(self, path):
+        compilewin = Toplevel(self)
+        compilewin.title('Компиляция...')
+        pbprogress: IntVar = IntVar()
+        pbtext: StringVar = StringVar()
+        Progressbar(compilewin, orient='horizontal', length=100, variable=pbprogress).grid(row=0, column=0, padx=5, pady=5)
+        Label(compilewin, textvariable=pbtext).grid(row=1, column=0, padx=5, pady=5)
+        pbprogress.set(0)
+        pbtext.set('Определяем пути...')
+        def compile_in_background():
             try:
-                subprocess.run(f'{activate_script} && pip install {lib}', shell=True, check=True)
-                print(f'[ProgramCompiler] Библиотека {lib} установлена.')
-            except subprocess.CalledProcessError as e:
-                print(f"[ProgramCompiler] Ошибка установки библиотеки {lib}: {e}")
+                ch = choosedir(path.get())  
+                appname = ch[1]
+                dest_dir = ch[3]
+                build_dir = ch[4]
+                dist_dir = ch[5]
 
-        # Build the application with PyInstaller
-        pyinstaller_cmd = f'{activate_script} && pyinstaller --noconfirm --onefile --console "{path}" --distpath "{dist_dir}" --workpath "{build_dir}" --specpath "{dest_dir}"'
-        print(f"[ProgramCompiler] Запускаем команду: {pyinstaller_cmd}")
-        subprocess.run(pyinstaller_cmd, shell=True, check=True)
+                pbprogress.set(14)
+                pbtext.set("Создаём директории...")
+                makedirs(build_dir, exist_ok=True)
+                makedirs(dist_dir, exist_ok=True)
 
-        # Path to the output directory
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        build_output_dir = os.path.join(script_dir, 'build')
-        os.makedirs(build_output_dir, exist_ok=True)
+                pbprogress.set(28)
+                pbtext.set("Создаем виртуальную среду...")
+                run(['python', '-m', 'venv', 'venv'], check=True)
 
-        # Path to the executable file
-        exe_file = os.path.join(dist_dir, f'{appname}.exe')
-        print(f"[ProgramCompiler] Ищем exe-файл: {exe_file}")
+                pbprogress.set(42)
+                pbtext.set("Активируем среду...")
+                if platform == 'win32':
+                    activate_script = _path.join('venv', 'Scripts', 'activate.bat')
+                else:
+                    activate_script = _path.join('venv', 'bin', 'activate')
+                run(f'{activate_script}', shell=True, check=True)
 
-        if not os.path.exists(exe_file):
-            raise FileNotFoundError(f"[ProgramCompiler] Exe-файл не найден: {exe_file}")
+                pbprogress.set(56)
+                pbtext.set("Устанавливаем библиотеки...")
+                run(f'pip install pyinstaller', shell=True, check=True)
 
-        # Copy the executable to the build directory
-        shutil.copy(exe_file, build_output_dir)
-        print(f"[ProgramCompiler] Exe-файл скопирован в {build_output_dir}")
+                imports = get_imports_from_file(path.get())  
+                install_missing_libraries(imports)
 
-        # Clean up temporary directories
-        shutil.rmtree(dest_dir)
-        print('[ProgramCompiler] Удалена кеш-папка')
+                pbprogress.set(70)
+                pbtext.set("Собираем приложение...")
+                pyinstaller_cmd = f'pyinstaller --clean --noconfirm --onefile --console "{path.get()}" --distpath "{dist_dir}" --workpath "{build_dir}" --specpath "{dest_dir}" --name "{appname}"'
+                run(pyinstaller_cmd, shell=True, check=True)
 
-        # Remove the virtual environment
-        shutil.rmtree('venv')
-        print('[ProgramCompiler] Удалена виртуальная среда для экономии места. Она встроена в exe-файл.')
+                pbprogress.set(84)
+                pbtext.set("Копируем исполняющий файл...")
+                script_dir = _path.dirname(_path.abspath(__file__))
+                build_output_dir = _path.join(script_dir, 'build')
+                makedirs(build_output_dir, exist_ok=True)
+                exe_file = _path.join(dist_dir, f'{appname}.exe')
+                copy(exe_file, build_output_dir)
+                rmtree(dest_dir)
+                rmtree('venv')
 
-        print(f'\n\n[ProgramCompiler] Сборка программы {appname}.exe успешно завершена.')
-    except Exception as err:
-        print(f"[ProgramCompiler] Ошибка обработки файла: {err}")
-        input("Нажмите Enter для закрытия консоли...")
+                pbprogress.set(100)
+                pbtext.set("Готово!")
+
+                result = askquestion('Готово!', f'Программа успешно собрана!\n\n Местоположение: {build_output_dir} \n\n Не желаете открыть папку сборки?')
+                if result == 'yes':
+                    openfolder(build_output_dir)
+                else:
+                    pass
+                compilewin.destroy()
+
+            except Exception as err:
+                showerror('Ошибка!', f"Ошибка сборки: {str(err)}")
+                compilewin.destroy()
+
+        Thread(target=compile_in_background).start()
 
 if __name__ == "__main__":
-    main()
-    input("Нажмите Enter для закрытия консоли...")
-
+    Main().mainloop()
